@@ -46,6 +46,8 @@ def load_sr_pairs(hr_dir: str, lr_dir: str, hr_prefix: str = "", lr_prefix: str 
         lr_files[key] = f
 
     matched_keys = sorted(set(hr_files.keys()) & set(lr_files.keys()))
+    hr_files = {k: hr_files[k] for k in matched_keys}
+    lr_files = {k: lr_files[k] for k in matched_keys}
     return matched_keys, hr_files, lr_files
 
 
