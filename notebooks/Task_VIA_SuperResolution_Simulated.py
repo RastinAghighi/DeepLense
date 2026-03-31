@@ -519,25 +519,76 @@ print(f"\nEnsemble boost: +{ens_psnr_gain:.3f} dB PSNR (EDSR+ vs EDSR)")
 # ## 11. Metric Distribution Plots
 
 # %%
-# TODO
+plot_metric_distributions(
+    [bicubic_metrics, results_standard, results_ensemble],
+    ["Bicubic", "EDSR", "EDSR+"],
+    save_path=os.path.join("..", "figures", "metric_distributions_6a.png"),
+)
 
 # %% [markdown]
 # ## 12. Visual Comparison
 
 # %%
-# TODO
+plot_visual_comparison(
+    samples=[(s[0], s[1], s[2], s[3]) for s in test_samples[:5]],
+    col_titles=["LR Input (75×75)", "EDSR Output", "EDSR+ (Ensemble)", "HR Ground Truth (150×150)"],
+    save_path=os.path.join("..", "figures", "visual_comparison_6a.png"),
+)
 
 # %% [markdown]
 # ## 13. Error Maps
 
 # %%
-# TODO
+error_map_samples = []
+for lr_np, sr_std_np, sr_ens_np, hr_np in test_samples[:5]:
+    bicubic_up = F.interpolate(
+        torch.from_numpy(lr_np).unsqueeze(0).unsqueeze(0),
+        size=hr_np.shape, mode="bicubic", align_corners=False,
+    )[0, 0].numpy()
+    bic_err = np.abs(bicubic_up - hr_np)
+    std_err = np.abs(sr_std_np - hr_np)
+    ens_err = np.abs(sr_ens_np - hr_np)
+    error_map_samples.append((bic_err, std_err, ens_err))
+
+plot_error_maps(
+    samples=error_map_samples,
+    method_names=["Bicubic", "EDSR", "EDSR+"],
+    hr_images=[s[3] for s in test_samples[:5]],
+    save_path=os.path.join("..", "figures", "error_maps_6a.png"),
+)
 
 # %% [markdown]
 # ## 14. Failure Analysis
 
 # %%
-# TODO
+worst_indices = np.argsort(results_ensemble["psnr"])[:5]
+
+worst_samples = []
+model.eval()
+with torch.no_grad():
+    for idx in worst_indices:
+        hr, lr = test_dataset[idx]
+        lr_tensor = lr.unsqueeze(0)
+        sr = self_ensemble_predict(model, lr_tensor, device)
+
+        lr_np = lr[0].numpy()
+        sr_np = sr[0, 0].numpy()
+        hr_np = hr[0].numpy()
+        metrics_dict = compute_metrics(sr_np, hr_np)
+        worst_samples.append((lr_np, sr_np, hr_np, metrics_dict))
+
+plot_failure_analysis(
+    worst_samples,
+    save_path=os.path.join("..", "figures", "failure_analysis_6a.png"),
+)
+
+print("Failure Analysis Notes:")
+print("-" * 50)
+print("Worst PSNR images tend to have bright, compact central sources where")
+print("small spatial errors produce large intensity mismatches.")
+print()
+print("EDSR's L1 loss treats all errors equally — perceptual or adversarial")
+print("losses could preserve sharp features better.")
 
 # %% [markdown]
 # ## 15. Ablation Study: L1-only vs Composite Loss
