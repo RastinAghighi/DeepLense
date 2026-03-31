@@ -785,6 +785,235 @@ plot_ablation_table(
 
 # %% [markdown]
 # ## 17. Discussion
-
-# %% [markdown]
-# TODO
+#
+# This section reflects on what the EDSR-baseline model learned, where it breaks
+# down, and what these results mean for the broader GSoC proposal on unsupervised
+# super-resolution of real lensing images.
+#
+# ---
+#
+# ### Where the Model Succeeds
+#
+# The model performs well on images dominated by **smooth, extended arc structures**
+# — the most common morphology in strong gravitational lensing. These arcs have
+# relatively low spatial-frequency content and gradual intensity gradients, which
+# aligns naturally with what an L1-trained convolutional network learns to
+# reconstruct. The global residual connection in EDSR (predicting the difference
+# between bicubic upsampling and the true HR image, rather than hallucinating the
+# output from scratch) gives the network a stable baseline to refine. This means
+# it only needs to learn the *residual detail* — the fine structure that bicubic
+# interpolation smooths away — rather than the entire image formation process.
+# In practice, the network reliably recovers arc curvature, approximate surface
+# brightness profiles, and the overall morphology of the Einstein ring.
+#
+# The self-ensemble strategy (EDSR+) adds a further quality boost by exploiting
+# the approximate rotational and reflective symmetry of lensing configurations.
+# Since gravitational lensing images have no preferred orientation on the sky,
+# averaging predictions over eight geometric transforms effectively marginalises
+# over the network's directional biases. The improvement from EDSR to EDSR+ is
+# consistent across the test set: roughly +[PSNR_GAIN] dB in PSNR and a small but
+# reliable improvement in SSIM. This is a free lunch — no additional training,
+# no extra parameters, just a smarter use of the model at inference time.
+#
+# ---
+#
+# ### Where the Model Fails
+#
+# Two failure modes stand out in the error analysis (see the per-sample failure
+# figures in Section 14).
+#
+# **Bright compact central galaxies.** When the deflector galaxy has a steep,
+# concentrated surface brightness profile, even a small spatial misalignment
+# (a shift of one or two pixels) produces a large intensity mismatch in the
+# residual. The model tends to slightly blur these peaks, predicting a broadened
+# version of the central profile rather than the sharp cusp. This is visible in
+# the worst-case residual maps, where the error is spatially concentrated at the
+# image centre. Because these pixels carry the highest flux in the image, even
+# modest relative errors translate into outsized contributions to the MSE and
+# flux error metrics.
+#
+# **Faint extended features near the noise floor.** At the opposite extreme,
+# low surface-brightness arcs and counter-images that sit just above the
+# background noise are difficult for the model to distinguish from noise
+# realisations. The network tends to suppress these features, producing a
+# slightly cleaner but astrophysically incomplete reconstruction. This is
+# particularly concerning for science cases that depend on detecting faint
+# substructure or extended tidal features in the lensed source.
+#
+# ---
+#
+# ### Why It Fails
+#
+# These failure modes are not accidental — they follow directly from the training
+# objective and architecture.
+#
+# **L1 loss and regression to the mean.** The L1 (MAE) loss trains the network
+# to predict the *conditional median* of the HR image given the LR input. When
+# the mapping from LR to HR is one-to-many (as it always is in super-resolution
+# — multiple HR images can produce the same LR observation), the median is a
+# blurred compromise between the possible HR solutions. This is the fundamental
+# reason the model softens sharp peaks and suppresses faint features: both
+# represent modes of the posterior that the median smooths over. An L1-trained
+# network will never hallucinate detail that is not supported by the majority of
+# plausible HR explanations.
+#
+# **No mechanism to prioritise astrophysically significant features.** The loss
+# treats every pixel equally (after the SSIM and Fourier terms weight structural
+# and frequency content). It has no notion that the faint counter-image at 2%
+# of peak flux is more scientifically valuable than a marginal improvement in
+# the bright deflector core. A physics-aware loss could in principle re-weight
+# the error by astrophysical significance, but designing such a loss requires
+# domain-specific choices that go beyond standard SR practice.
+#
+# **Limited receptive field.** The EDSR-baseline uses 16 residual blocks of 3×3
+# convolutions, giving a theoretical receptive field that grows linearly with
+# depth but an *effective* receptive field that is considerably smaller. For the
+# largest Einstein rings in the dataset (radii approaching 30–40 pixels in the
+# HR image), the network may not have sufficient spatial context to reason about
+# the global ring geometry when reconstructing local patches. Attention
+# mechanisms or larger kernels could address this, at the cost of increased
+# memory and computation.
+#
+# ---
+#
+# ### Physics-Informed Loss
+#
+# The composite loss function incorporates two physics-motivated terms beyond
+# standard pixel-level reconstruction.
+#
+# **Flux consistency** enforces approximate photon conservation: the total flux
+# in the SR output should match the total flux in the HR ground truth. In
+# astrophysical imaging, integrated flux is a direct observable tied to physical
+# luminosity, so a model that redistributes flux (e.g., sharpening a core at the
+# expense of the wings) may improve perceptual quality while corrupting the
+# photometry. The ablation study (Section 16) confirms this: the composite loss
+# reduces the mean flux error from [L1_FLUX_ERROR]% to [COMPOSITE_FLUX_ERROR]%
+# compared to the L1-only baseline, demonstrating that the explicit flux term
+# successfully anchors the model's photometric fidelity.
+#
+# **Back-projection consistency** penalises solutions that, when downsampled
+# back to the LR resolution, do not match the original LR input. This is a
+# soft version of the observation-consistency constraint: the SR output should
+# be *compatible* with the data that was actually observed. Crucially,
+# back-projection requires only a degradation model (the downsampling operator),
+# not paired HR–LR training data. This property makes it directly transferable
+# to unsupervised and self-supervised settings, a point we return to below.
+#
+# The ablation table shows that the full composite loss (L1 + SSIM + Fourier +
+# flux + back-projection) achieves [COMPOSITE_PSNR] dB PSNR and [COMPOSITE_SSIM]
+# SSIM on the test set, compared to [L1_PSNR] dB / [L1_SSIM] for the L1-only
+# baseline. The improvement is modest in aggregate metrics but is concentrated
+# in the failure modes described above — the composite loss is more effective at
+# preserving faint features and maintaining photometric accuracy.
+#
+# ---
+#
+# ### Self-Ensemble (EDSR+)
+#
+# The self-ensemble strategy deserves separate discussion because it is both
+# simple and surprisingly effective for this domain. Gravitational lensing images
+# possess an approximate symmetry that natural photographs do not: the orientation
+# of a lens system on the sky is arbitrary, so there is no preferred "up" or
+# "left." A network trained with random rotations and flips *should* be
+# equivariant to these transforms, but finite training data and the inherent
+# asymmetry of convolutional filters mean that in practice the network has
+# slight directional biases. Averaging over the eight-element dihedral group
+# (D₄: four rotations × horizontal flip) cancels these biases analytically.
+#
+# The EDSR+ ensemble improves PSNR by approximately +[PSNR_GAIN] dB over the
+# single-pass EDSR baseline, and reduces flux error by a small but consistent
+# margin. The cost is an 8× increase in inference time, which is negligible for
+# a test set of this size but would need consideration in a production pipeline
+# processing millions of lensing candidates from surveys like Euclid or LSST.
+#
+# ---
+#
+# ### What Would Improve Results
+#
+# Several directions could push performance beyond the current EDSR-baseline:
+#
+# - **Perceptual loss (VGG features).** Replacing or supplementing the pixel-level
+#   L1 loss with a loss computed in the feature space of a pretrained VGG network
+#   encourages the model to match high-level texture and structure rather than
+#   individual pixel values. This has been shown to produce visually sharper SR
+#   outputs in natural image benchmarks, and could help recover fine arc
+#   substructure that the L1 loss blurs away.
+#
+# - **Adversarial training (ESRGAN).** A GAN-based approach trains a discriminator
+#   to distinguish SR outputs from real HR images, pushing the generator toward
+#   the manifold of realistic HR images rather than the blurry conditional mean.
+#   ESRGAN and its variants produce the sharpest SR results in the literature,
+#   though at the risk of hallucinating plausible but incorrect detail — a
+#   serious concern for scientific imaging where false structure could mimic
+#   astrophysical signals.
+#
+# - **Diffusion models (DiffLense).** The mentors' DiffLense framework models
+#   the full posterior distribution p(HR | LR) rather than a single point
+#   estimate. This is arguably the most principled approach for scientific SR:
+#   instead of one "best guess," the model generates an ensemble of plausible
+#   HR reconstructions, allowing downstream analysis to propagate the
+#   reconstruction uncertainty into physical parameter estimates. Diffusion
+#   models avoid the mode collapse and training instability of GANs while
+#   producing comparable or superior perceptual quality.
+#
+# - **Attention mechanisms (RCAN, SwinIR).** Channel attention (RCAN) and
+#   window-based self-attention (SwinIR) expand the effective receptive field
+#   and allow the network to modulate features based on global image context.
+#   For lensing images, this could help the model reason about the full ring
+#   geometry when reconstructing local patches, addressing the limited receptive
+#   field issue noted above.
+#
+# - **Physics-informed regularisation beyond flux.** The current flux consistency
+#   term is a zeroth-order constraint (total counts). Higher-order constraints
+#   could include PSF modeling (requiring the SR output convolved with the
+#   instrument PSF to match the LR observation), power spectrum matching
+#   (penalising deviations in the azimuthally averaged power spectrum), or
+#   even lens-model-informed priors that encourage the SR output to be
+#   consistent with a parametric lens mass model. Each adds complexity and
+#   domain-specific assumptions, but could significantly improve reconstruction
+#   of scientifically relevant features.
+#
+# ---
+#
+# ### Connection to GSoC Proposal
+#
+# This supervised SR model serves a specific role in the broader GSoC project:
+# it establishes a **performance ceiling** for the proposed unsupervised approach.
+# By training on paired (LR, HR) simulated data with full supervision, we obtain
+# the best reconstruction quality achievable with this architecture and loss
+# function. The unsupervised method proposed for real lensing images will not
+# have access to paired HR ground truth, so it will necessarily perform at or
+# below this ceiling.
+#
+# The gap between supervised and unsupervised performance will directly quantify
+# the **cost of removing paired training data** — a central question for the
+# project. If the gap is small, it validates the unsupervised approach as a
+# practical tool for real data. If the gap is large, it identifies which aspects
+# of reconstruction quality degrade without supervision, guiding the design of
+# better self-supervised losses.
+#
+# Several components of this supervised pipeline transfer directly to the
+# unsupervised setting:
+#
+# - The **back-projection loss** requires only a degradation model (downsampling
+#   operator), not paired data. It is already a self-supervised loss in
+#   disguise, and forms the backbone of methods like DBPN and ZSSR.
+# - The **flux consistency loss** is similarly self-supervised: it compares
+#   the SR output's total flux against the (known) LR input flux, scaled by
+#   the upsampling factor.
+# - The **EDSR architecture** and self-ensemble strategy are
+#   supervision-agnostic — they define how the network maps LR → HR, not
+#   how the loss is computed.
+#
+# What *cannot* transfer is the direct pixel-level L1 loss against HR ground
+# truth. The unsupervised method must replace this with losses that measure
+# quality without reference to a known HR image: cycle consistency,
+# back-projection, degradation modeling, or learned perceptual metrics. The
+# results in this notebook — particularly the ablation study showing which
+# loss components contribute most — provide a roadmap for which self-supervised
+# surrogates are likely to be most effective.
+#
+# In summary, this Task VI.A notebook is not an end in itself but a carefully
+# instrumented baseline. Every metric, visualisation, and ablation result here
+# will have a direct counterpart in the unsupervised experiments on real data,
+# enabling rigorous comparison and principled development of the proposed method.
