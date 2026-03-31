@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+weights/*.pth
+Dataset/
+Dataset 3B/
+*.zip
+.env
