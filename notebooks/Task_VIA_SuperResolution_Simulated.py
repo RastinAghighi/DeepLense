@@ -422,15 +422,98 @@ plot_training_curves(
 
 # %% [markdown]
 # ## 9. Self-Ensemble Inference (EDSR+)
-
-# %%
-# TODO
+#
+# We run the model on 8 augmented versions of each LR input (4 rotations × 2 flip
+# states) and average the de-augmented outputs. This geometric self-ensemble
+# suppresses directional artifacts and typically adds +0.1 to +0.3 dB PSNR without
+# retraining.
 
 # %% [markdown]
 # ## 10. Full Evaluation on Test Set
 
 # %%
-# TODO
+model.eval()
+
+results_standard = {"mse": [], "ssim": [], "psnr": [], "flux_error": []}
+results_ensemble = {"mse": [], "ssim": [], "psnr": [], "flux_error": []}
+test_samples = []
+
+with torch.no_grad():
+    for hr, lr in tqdm(test_loader, desc="Evaluating"):
+        # Standard inference
+        sr_std = model(lr.to(device)).cpu()
+
+        # Ensemble inference
+        sr_ens = self_ensemble_predict(model, lr, device)
+
+        # Convert to numpy
+        hr_np = hr[0, 0].numpy()
+        lr_np = lr[0, 0].numpy()
+        sr_std_np = sr_std[0, 0].numpy()
+        sr_ens_np = sr_ens[0, 0].numpy()
+
+        # Compute metrics for both
+        m_std = compute_metrics(sr_std_np, hr_np)
+        m_ens = compute_metrics(sr_ens_np, hr_np)
+
+        for k in results_standard:
+            results_standard[k].append(m_std[k])
+            results_ensemble[k].append(m_ens[k])
+
+        # Store first 10 samples for visualization
+        if len(test_samples) < 10:
+            test_samples.append((lr_np, sr_std_np, sr_ens_np, hr_np))
+
+# ── Comprehensive results table ────────────────────────────────────────────
+print("=" * 80)
+print("Full Evaluation Results")
+print("=" * 80)
+print(f"{'Metric':<14} {'Bicubic':<22} {'EDSR':<22} {'EDSR+':<22}")
+print("-" * 80)
+
+for k in ["psnr", "ssim", "mse", "flux_error"]:
+    bic_mean = np.mean(bicubic_metrics[k])
+    bic_std = np.std(bicubic_metrics[k])
+    bic_med = np.median(bicubic_metrics[k])
+    bic_lo, bic_hi = bootstrap_ci(bicubic_metrics[k])
+
+    std_mean = np.mean(results_standard[k])
+    std_std = np.std(results_standard[k])
+    std_med = np.median(results_standard[k])
+    std_lo, std_hi = bootstrap_ci(results_standard[k])
+
+    ens_mean = np.mean(results_ensemble[k])
+    ens_std = np.std(results_ensemble[k])
+    ens_med = np.median(results_ensemble[k])
+    ens_lo, ens_hi = bootstrap_ci(results_ensemble[k])
+
+    print(f"{k.upper():<14} "
+          f"{bic_mean:.4f}±{bic_std:.4f}  "
+          f"{std_mean:.4f}±{std_std:.4f}  "
+          f"{ens_mean:.4f}±{ens_std:.4f}")
+    print(f"{'  median':<14} "
+          f"{bic_med:.4f}           "
+          f"{std_med:.4f}           "
+          f"{ens_med:.4f}")
+    print(f"{'  95% CI':<14} "
+          f"[{bic_lo:.4f},{bic_hi:.4f}] "
+          f"[{std_lo:.4f},{std_hi:.4f}] "
+          f"[{ens_lo:.4f},{ens_hi:.4f}]")
+
+# ── Improvement summary ────────────────────────────────────────────────────
+print("\n" + "=" * 80)
+print("Improvement Summary (EDSR+ over Bicubic)")
+print("=" * 80)
+psnr_gain = np.mean(results_ensemble["psnr"]) - np.mean(bicubic_metrics["psnr"])
+ssim_gain = np.mean(results_ensemble["ssim"]) - np.mean(bicubic_metrics["ssim"])
+mse_reduction = (1 - np.mean(results_ensemble["mse"]) / np.mean(bicubic_metrics["mse"])) * 100
+
+print(f"PSNR gain:      +{psnr_gain:.2f} dB")
+print(f"SSIM gain:      +{ssim_gain:.4f}")
+print(f"MSE reduction:  {mse_reduction:.1f}%")
+
+ens_psnr_gain = np.mean(results_ensemble["psnr"]) - np.mean(results_standard["psnr"])
+print(f"\nEnsemble boost: +{ens_psnr_gain:.3f} dB PSNR (EDSR+ vs EDSR)")
 
 # %% [markdown]
 # ## 11. Metric Distribution Plots
