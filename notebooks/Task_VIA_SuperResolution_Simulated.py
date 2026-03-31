@@ -592,15 +592,196 @@ print("losses could preserve sharp features better.")
 
 # %% [markdown]
 # ## 15. Ablation Study: L1-only vs Composite Loss
+#
+# To validate the composite loss, we train an identical EDSR model using only L1
+# loss (no flux consistency, no back-projection). Same architecture, same seed
+# (42), same train/test split, same augmentation, same optimizer, same scheduler.
+# The only difference is the loss function.
 
 # %%
-# TODO
+# ── Reproducibility (reset seed for fair comparison) ──────────────────────────
+random.seed(42)
+np.random.seed(42)
+torch.manual_seed(42)
+torch.cuda.manual_seed_all(42)
+
+model_l1 = EDSR(n_channels=1, n_feats=64, n_resblocks=16, scale=2).to(device)
+
+criterion_l1 = nn.L1Loss()
+optimizer_l1 = Adam(model_l1.parameters(), lr=LEARNING_RATE)
+scheduler_l1 = ReduceLROnPlateau(optimizer_l1, mode="min", factor=0.5, patience=5)
+
+history_l1 = {
+    "train_loss": [], "val_loss": [], "val_psnr": [], "val_ssim": [], "lr": [],
+}
+
+best_val_loss_l1 = float("inf")
+patience_counter_l1 = 0
+best_model_state_l1 = None
+
+for epoch in range(NUM_EPOCHS):
+    # ── Training phase ────────────────────────────────────────────────────────
+    model_l1.train()
+    running_loss = 0.0
+    n_train = 0
+
+    for hr, lr in tqdm(train_loader, desc=f"[L1] Ep {epoch+1}/{NUM_EPOCHS} [train]", leave=False):
+        hr, lr = hr.to(device), lr.to(device)
+        optimizer_l1.zero_grad()
+        sr = model_l1(lr)
+        loss = criterion_l1(sr, hr)
+        loss.backward()
+        optimizer_l1.step()
+
+        bs = hr.size(0)
+        running_loss += loss.item() * bs
+        n_train += bs
+
+    history_l1["train_loss"].append(running_loss / n_train)
+
+    # ── Validation phase ──────────────────────────────────────────────────────
+    model_l1.eval()
+    running_val_loss = 0.0
+    running_psnr, running_ssim = 0.0, 0.0
+    n_val = 0
+
+    with torch.no_grad():
+        for hr, lr in tqdm(test_loader, desc=f"[L1] Ep {epoch+1}/{NUM_EPOCHS} [val]", leave=False):
+            hr, lr = hr.to(device), lr.to(device)
+            sr = model_l1(lr)
+            loss = criterion_l1(sr, hr)
+
+            sr_np = sr.cpu().clamp(0, 1).squeeze().numpy()
+            hr_np = hr.cpu().clamp(0, 1).squeeze().numpy()
+
+            running_val_loss += loss.item()
+            running_psnr += peak_signal_noise_ratio(hr_np, sr_np, data_range=1.0)
+            running_ssim += structural_similarity(hr_np, sr_np, data_range=1.0)
+            n_val += 1
+
+    avg_val_loss = running_val_loss / n_val
+    avg_psnr = running_psnr / n_val
+    avg_ssim = running_ssim / n_val
+
+    history_l1["val_loss"].append(avg_val_loss)
+    history_l1["val_psnr"].append(avg_psnr)
+    history_l1["val_ssim"].append(avg_ssim)
+    history_l1["lr"].append(optimizer_l1.param_groups[0]["lr"])
+
+    scheduler_l1.step(avg_val_loss)
+
+    # ── Logging (every 5 epochs or on improvement) ────────────────────────────
+    improved = avg_val_loss < best_val_loss_l1
+    if (epoch + 1) % 5 == 0 or improved:
+        tag = " *" if improved else ""
+        print(
+            f"[L1] Ep {epoch+1}/{NUM_EPOCHS} | "
+            f"Loss: {history_l1['train_loss'][-1]:.4f} | "
+            f"Val PSNR: {avg_psnr:.2f} SSIM: {avg_ssim:.4f} | "
+            f"LR: {optimizer_l1.param_groups[0]['lr']:.1e}{tag}"
+        )
+
+    # ── Early stopping ────────────────────────────────────────────────────────
+    if improved:
+        best_val_loss_l1 = avg_val_loss
+        patience_counter_l1 = 0
+        best_model_state_l1 = {k: v.cpu().clone() for k, v in model_l1.state_dict().items()}
+    else:
+        patience_counter_l1 += 1
+
+    if patience_counter_l1 >= PATIENCE:
+        print(f"[L1] Early stopping at epoch {epoch+1} (no improvement for {PATIENCE} epochs)")
+        break
+
+# ── Restore best model and save weights ───────────────────────────────────────
+model_l1.load_state_dict(best_model_state_l1)
+model_l1.to(device)
+
+torch.save(best_model_state_l1, os.path.join(weights_dir, "edsr_simulated_l1only.pth"))
+print(f"L1-only model saved to weights/edsr_simulated_l1only.pth "
+      f"(val loss: {best_val_loss_l1:.4f})")
+
+# Save L1 training history
+history_l1_path = os.path.join(weights_dir, "edsr_simulated_l1only_history.json")
+with open(history_l1_path, "w") as f:
+    json.dump(history_l1, f)
+print(f"L1-only training history saved to {history_l1_path}")
+
+# ── Evaluate L1-only model on test set with self-ensemble ─────────────────────
+model_l1.eval()
+results_l1_ensemble = {"mse": [], "ssim": [], "psnr": [], "flux_error": []}
+
+with torch.no_grad():
+    for hr, lr in tqdm(test_loader, desc="L1-only EDSR+ evaluation"):
+        sr_ens = self_ensemble_predict(model_l1, lr, device)
+
+        hr_np = hr[0, 0].numpy()
+        sr_ens_np = sr_ens[0, 0].numpy()
+
+        m = compute_metrics(sr_ens_np, hr_np)
+        for k in results_l1_ensemble:
+            results_l1_ensemble[k].append(m[k])
+
+print("\nL1-only EDSR+ Test Results")
+print("-" * 50)
+for k in results_l1_ensemble:
+    print(format_metric_row(k, results_l1_ensemble[k]))
 
 # %% [markdown]
 # ## 16. Ablation Results Comparison
 
 # %%
-# TODO
+# ── Comparison table: Bicubic / L1-only EDSR+ / Composite EDSR+ ──────────────
+print("=" * 90)
+print("Ablation Study: Loss Function Comparison")
+print("=" * 90)
+print(f"{'Metric':<14} {'Bicubic':<24} {'L1-only EDSR+':<24} {'Composite EDSR+':<24}")
+print("-" * 90)
+
+for k in ["psnr", "ssim", "mse", "flux_error"]:
+    bic = np.array(bicubic_metrics[k])
+    l1 = np.array(results_l1_ensemble[k])
+    comp = np.array(results_ensemble[k])
+
+    print(f"{k.upper():<14} "
+          f"{bic.mean():.4f} ± {bic.std():.4f}   "
+          f"{l1.mean():.4f} ± {l1.std():.4f}   "
+          f"{comp.mean():.4f} ± {comp.std():.4f}")
+
+# ── Improvement deltas ────────────────────────────────────────────────────────
+print("\n" + "=" * 90)
+print("Improvement Deltas (Composite EDSR+ vs L1-only EDSR+)")
+print("=" * 90)
+
+for k in ["psnr", "ssim", "mse", "flux_error"]:
+    l1_mean = np.mean(results_l1_ensemble[k])
+    comp_mean = np.mean(results_ensemble[k])
+    delta = comp_mean - l1_mean
+
+    # For MSE and flux_error, lower is better
+    if k in ("mse", "flux_error"):
+        pct = (1 - comp_mean / l1_mean) * 100 if l1_mean != 0 else 0.0
+        direction = "reduction" if delta < 0 else "increase"
+        print(f"{k.upper():<14} {delta:+.6f}  ({abs(pct):.1f}% {direction})")
+    else:
+        pct = (comp_mean / l1_mean - 1) * 100 if l1_mean != 0 else 0.0
+        direction = "gain" if delta > 0 else "drop"
+        print(f"{k.upper():<14} {delta:+.4f}  ({abs(pct):.2f}% {direction})")
+
+print("\n** Flux error is where the composite loss should shine — the flux-consistency")
+print("   term directly penalises integrated-intensity mismatches during training. **")
+
+# ── Ablation table figure ─────────────────────────────────────────────────────
+ablation_results = {
+    "Bicubic": bicubic_metrics,
+    "L1-only EDSR+": results_l1_ensemble,
+    "Composite EDSR+": results_ensemble,
+}
+plot_ablation_table(
+    ablation_results,
+    ["Bicubic", "L1-only EDSR+", "Composite EDSR+"],
+    save_path=os.path.join("..", "figures", "ablation_6a.png"),
+)
 
 # %% [markdown]
 # ## 17. Discussion
