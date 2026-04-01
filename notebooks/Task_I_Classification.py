@@ -13,9 +13,13 @@
 # ---
 
 # %% [markdown]
+# **Disclaimer:** This notebook was developed with the assistance of AI tools for code generation and formatting. The research strategy, architectural decisions, and experimental design were conducted by the author with guidance from academic advisors. All code was reviewed, tested, and validated by the author.
+
+
+# %% [markdown]
 # # Task I: Multi-Class Classification of Gravitational Lensing Images
 # **Author:** Rastin Aghighi
-# **DEEPLENSE – GSoC 2026 (ML4SCI)**
+# **DEEPLENSE - GSoC 2026 (ML4SCI)**
 # **Project:** Unsupervised Super-Resolution and Analysis of Real Lensing Images
 #
 # ## Strategy
@@ -29,7 +33,7 @@
 # channels to match the pretrained input expectations.
 #
 # We apply data augmentation that respects the physical symmetries of lensing images:
-# random rotation (continuous, 0–360°), horizontal flip, and vertical flip.
+# random rotation (continuous, 0-360°), horizontal flip, and vertical flip.
 # Gravitational lensing has no preferred orientation on the sky, so all rotations
 # are physically valid augmentations. This effectively multiplies the training set
 # without introducing unphysical distortions.
@@ -517,7 +521,7 @@ print(f"Incorrect predictions: {incorrect_mask.sum()} / {len(all_labels)}")
 # gives a strong initialisation even for single-channel astrophysical images.
 #
 # **Hardest class:** We expect the "no substructure" vs "subhalo" distinction to
-# be the most challenging, as subhalo perturbations can be subtle — small
+# be the most challenging, as subhalo perturbations can be subtle - small
 # distortions in the arc morphology that are easy to miss. The vortex class
 # typically produces more distinctive spiral-like features that the network can
 # learn more readily.
@@ -530,5 +534,5 @@ print(f"Incorrect predictions: {incorrect_mask.sum()} / {len(all_labels)}")
 # **Connection to GSoC:** This classifier provides a quantitative framework for
 # evaluating downstream impacts of super-resolution. If SR-enhanced images
 # improve classification AUC, it demonstrates that the super-resolution model
-# preserves and enhances physically meaningful substructure features — a key
+# preserves and enhances physically meaningful substructure features - a key
 # validation for the GSoC project goal of unsupervised SR on real lensing images.

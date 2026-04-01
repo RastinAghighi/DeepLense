@@ -13,9 +13,13 @@
 # ---
 
 # %% [markdown]
+# **Disclaimer:** This notebook was developed with the assistance of AI tools for code generation and formatting. The research strategy, architectural decisions, and experimental design were conducted by the author with guidance from academic advisors. All code was reviewed, tested, and validated by the author.
+
+
+# %% [markdown]
 # # Task VI.B: Supervised Super-Resolution on Real Strong Lensing Images
 # **Author:** Rastin Aghighi
-# **DEEPLENSE – GSoC 2026 (ML4SCI)**
+# **DEEPLENSE - GSoC 2026 (ML4SCI)**
 # **Project:** Unsupervised Super-Resolution and Analysis of Real Lensing Images
 #
 # ## Strategy
@@ -26,7 +30,7 @@
 # contain instrumental noise patterns, PSF variations, background subtraction
 # artifacts, and complex foreground/background contamination that simulators
 # do not model. This **domain gap** means that a model trained purely on
-# simulated pairs will under-perform on real data — the high-frequency textures
+# simulated pairs will under-perform on real data - the high-frequency textures
 # it learned to recover are specific to the simulation pipeline.
 #
 # To bridge this gap efficiently with only 300 real pairs, we adopt a
@@ -36,14 +40,14 @@
 # linear head (which lacks capacity to adapt), we progressively unfreeze
 # deeper layers:
 #
-# - **Stage 1 – Tail only:** Unfreeze only the pixel-shuffle upsampler and
+# - **Stage 1 - Tail only:** Unfreeze only the pixel-shuffle upsampler and
 #   final convolution. These layers are the most task-specific and need the
 #   most adaptation to the new degradation model.
-# - **Stage 2 – Blocks 10–15:** Unfreeze the later residual blocks, which
+# - **Stage 2 - Blocks 10-15:** Unfreeze the later residual blocks, which
 #   encode mid-level texture priors. These adapt to the real-data noise floor
 #   and PSF while retaining general SR features.
-# - **Stage 3 – Blocks 6–9:** Unfreeze the middle residual blocks. Earlier
-#   blocks (0–5) are kept frozen because they capture generic edge and
+# - **Stage 3 - Blocks 6-9:** Unfreeze the middle residual blocks. Earlier
+#   blocks (0-5) are kept frozen because they capture generic edge and
 #   gradient features that transfer well across domains.
 #
 # Each stage uses a reduced learning rate (1e-4 → 5e-5 → 2e-5) and
@@ -391,7 +395,7 @@ set_trainable(model, 1)
 #
 # Stage 1 adapts only the upsampling module (tail) to the real data's pixel
 # scale and noise characteristics, while keeping all feature extractors frozen.
-# This is the safest first step — we change as little as possible.
+# This is the safest first step - we change as little as possible.
 
 # %%
 from torch.optim import Adam
@@ -942,7 +946,10 @@ for k in ["psnr", "ssim", "mse", "flux_error"]:
           f"{ft_mean:.4f}±{ft_std:.4f}")
 
 transfer_gain = np.mean(results_ensemble["psnr"]) - np.mean(results_scratch["psnr"])
-print(f"\nTransfer learning advantage: +{transfer_gain:.2f} dB PSNR over from-scratch")
+sign = "+" if transfer_gain >= 0 else ""
+print(f"\nTransfer learning vs from-scratch: {sign}{transfer_gain:.2f} dB PSNR")
+if transfer_gain < 0:
+    print("  (from-scratch outperformed fine-tuned — see Discussion for analysis)")
 
 # %% [markdown]
 # ## 19. Ablation Results Comparison
@@ -967,7 +974,7 @@ plot_ablation_table(
 # ### Domain Gap
 #
 # The gap between simulated and real strong-lensing data is substantial.
-# Simulated images (Task VI.A) are generated under controlled conditions —
+# Simulated images (Task VI.A) are generated under controlled conditions -
 # analytic mass profiles, smooth source galaxies, and additive Gaussian noise
 # with a known variance. Real HSC/HST observations, by contrast, exhibit
 # spatially varying PSFs that change across the focal plane, correlated
@@ -978,7 +985,7 @@ plot_ablation_table(
 # images sample fundamentally different optical transfer functions.
 #
 # Our domain-gap analysis (Section 3) confirmed that the intensity
-# distributions of real and simulated images diverge significantly — real
+# distributions of real and simulated images diverge significantly - real
 # images have heavier tails and more complex background structure. Transfer
 # learning bridges this gap by preserving the useful low-level feature
 # extractors (edges, gradients) learned on the large simulated dataset while
@@ -997,93 +1004,114 @@ plot_ablation_table(
 #
 # We mitigate this through four complementary strategies:
 #
-# 1. **3-stage gradual unfreezing** — only a fraction of parameters are
+# 1. **3-stage gradual unfreezing** - only a fraction of parameters are
 #    trainable at any given stage (Stage 1 unfreezes only the tail; Stage 2
-#    adds blocks 10–15; Stage 3 adds blocks 6–9), dramatically reducing the
+#    adds blocks 10-15; Stage 3 adds blocks 6-9), dramatically reducing the
 #    effective model capacity relative to full fine-tuning.
-# 2. **L2-SP regularization** (α = 0.01) — penalizes deviation from
+# 2. **L2-SP regularization** (α = 0.01) - penalizes deviation from
 #    pretrained weights rather than from zero, keeping adapted parameters
 #    in a neighborhood of known-good representations.
-# 3. **8× stochastic augmentation** — random 90° rotations (4 orientations)
+# 3. **8× stochastic augmentation** - random 90° rotations (4 orientations)
 #    × horizontal flip × vertical flip effectively expand the training
 #    distribution without additional data collection. Lensing images have
 #    no preferred orientation, making all geometric augmentations physically
 #    valid.
-# 4. **Per-stage early stopping** — each stage monitors validation PSNR
+# 4. **Per-stage early stopping** - each stage monitors validation PSNR
 #    independently (patience = 10 for Stage 1, patience = 10 for later
 #    stages), halting training before the model memorizes noise patterns.
 #
 # ### Transfer Learning Analysis
 #
-# The ablation study (Section 18–19) directly quantifies the benefit of
+# The ablation study (Section 18-19) directly quantifies the effect of
 # transfer learning. The from-scratch EDSR was trained with identical
 # architecture, loss function, augmentation, and random seed on the same
-# 270 training images for up to 100 epochs. The fine-tuned EDSR+
-# (with self-ensemble) achieved a clear PSNR advantage over the
-# from-scratch model — the `transfer_gain` printed in Section 18 reports
-# this difference in dB.
+# 270 training images for up to 100 epochs. Contrary to our initial
+# expectation, the from-scratch EDSR+ slightly outperformed the fine-tuned
+# EDSR+ (32.72 vs 32.58 dB PSNR; 0.8417 vs 0.8257 SSIM). This warrants
+# honest analysis.
 #
-# This gap is explained by the feature hierarchy within EDSR:
-#
-# - **Blocks 0–5 (permanently frozen):** These layers encode generic
-#   edge detectors, gradient filters, and low-frequency texture features.
-#   They transfer well across domains because edges and gradients are
-#   domain-agnostic — an arc in a simulated lens looks structurally similar
-#   to an arc in a real HSC image. Freezing them prevents any degradation
-#   of these universal representations.
-# - **Blocks 6–9 (Stage 3, lr = 2e-5):** Mid-level features that combine
-#   edges into textures. These need moderate adaptation to handle the
-#   different noise floor and PSF characteristics of real data, but still
-#   benefit from their pretrained initialization.
-# - **Blocks 10–15 (Stage 2, lr = 5e-5):** High-level features encoding
-#   noise-specific patterns, artifact textures, and degradation-aware
-#   representations. These required the most adaptation because the
-#   simulated noise model diverges most from reality at this abstraction
-#   level.
-# - **Tail (Stage 1, lr = 1e-4):** The pixel-shuffle upsampler and final
-#   convolution are the most task-specific components. They are adapted
-#   first and with the highest learning rate because the mapping from
-#   feature space to output pixels must fully recalibrate to the real
-#   data's intensity distribution and noise characteristics.
-#
-# The from-scratch model, lacking any pretrained initialization, must learn
-# all of these representations from only 270 images — an insufficient
-# number to discover robust edge detectors, let alone high-level texture
-# priors. This explains why it converges to a worse optimum despite having
-# identical capacity.
-#
-# ### Why Gradual Unfreezing
-#
-# Gradual unfreezing prevents **catastrophic forgetting** — the phenomenon
-# where fine-tuning all layers simultaneously causes the network to rapidly
-# overwrite pretrained features with noise-fitting solutions. By unfreezing
-# in stages (tail → blocks 10–15 → blocks 6–9), each newly unfrozen layer
-# adapts in the context of already-stabilized downstream layers.
-#
-# **Differential learning rates** respect the feature hierarchy: the tail
-# trains at 1e-4 (needs the most change), deeper blocks at 5e-5 (moderate
-# adaptation), and middle blocks at 2e-5 (minimal adjustment). This
-# reflects the empirical finding that lower layers transfer better and
-# need less modification.
-#
-# **L2-SP regularization** (α = 0.01) provides an explicit inductive bias
-# toward the pretrained solution. Unlike standard weight decay, which
-# pulls parameters toward zero and can destroy learned features, L2-SP
-# anchors each parameter near its pretrained value:
+# **What happened:** Stage 1 fine-tuning alone was effective - adapting
+# the tail (pixel-shuffle upsampler and final convolution) with lr = 1e-4
+# achieved strong performance comparable to the from-scratch model. The
+# problem arose in Stages 2-3, where L2-SP regularization (α = 0.01)
+# proved too aggressive. L2-SP penalizes deviation from pretrained weights:
 #
 # $$\mathcal{L}_{\text{L2-SP}} = 0.01 \sum_i (\theta_i - \theta_i^{\text{pretrained}})^2$$
 #
-# This means newly unfrozen parameters start near a good solution and can
-# only drift away if the gradient signal from real data consistently
-# favors a different value — exactly the behavior we want when adapting
-# with limited data.
+# This anchors each parameter near its pretrained (simulated-data) value.
+# While this is desirable when data is scarce and the pretrained features
+# transfer well, it becomes counter-productive when the domain gap is
+# large enough that the optimal real-data weights lie outside the
+# regularizer's effective neighborhood. In Stages 2-3, the newly unfrozen
+# residual blocks (10-15 and 6-9) were pulled back toward their
+# simulated-data configurations even when the gradient signal from real
+# data consistently favored different representations. The result was a
+# net degradation from the Stage 1 checkpoint.
+#
+# **Why from-scratch succeeded:** The from-scratch model, unconstrained
+# by L2-SP anchoring, was free to explore the full parameter space. With
+# 270 images and aggressive augmentation (8× geometric transforms), there
+# was just enough data to learn reasonable features - not the richly
+# hierarchical features a large dataset would produce, but features
+# specifically tuned to the real HSC→HST degradation. The lack of
+# pretrained bias allowed the model to fit the real noise and PSF
+# characteristics directly.
+#
+# **Implications for the regularization strategy:**
+#
+# - **Stage 1 fine-tuning works well.** Adapting only the tail is a
+#   low-risk, high-reward strategy - the tail is the most task-specific
+#   component and benefits clearly from recalibration.
+# - **L2-SP α = 0.01 is too strong for Stages 2-3.** A smaller α (e.g.,
+#   0.001) or a decay schedule that relaxes the anchor as training
+#   progresses would likely allow the deeper blocks to adapt more freely
+#   while still benefiting from pretrained initialization.
+# - **The domain gap between simulated and real data is larger than
+#   anticipated** at the mid-to-high feature level. Low-level edge
+#   detectors (blocks 0-5, permanently frozen) likely transfer well, but
+#   blocks 6-15 encode noise-specific and PSF-specific patterns that
+#   diverge significantly between simulated and real data.
+#
+# Despite the fine-tuned model's slight underperformance, the margin is
+# small (0.14 dB), and both approaches dramatically outperform the
+# bicubic baseline (20.73 dB). The practical lesson is that for this
+# dataset size and domain gap, simpler fine-tuning (Stage 1 only) or
+# reduced regularization would likely match or exceed from-scratch
+# training, combining the speed of transfer learning with the flexibility
+# needed for real-data adaptation.
+#
+# ### Why Gradual Unfreezing (and Where It Fell Short)
+#
+# Gradual unfreezing is designed to prevent **catastrophic forgetting** -
+# the phenomenon where fine-tuning all layers simultaneously causes the
+# network to rapidly overwrite pretrained features with noise-fitting
+# solutions. By unfreezing in stages (tail → blocks 10-15 → blocks 6-9),
+# each newly unfrozen layer adapts in the context of already-stabilized
+# downstream layers. **Differential learning rates** respect the feature
+# hierarchy: the tail trains at 1e-4, deeper blocks at 5e-5, and middle
+# blocks at 2e-5.
+#
+# In practice, Stage 1 (tail only) was the most effective stage of
+# fine-tuning. Stages 2-3 slightly degraded performance, as discussed
+# in the transfer learning analysis above. The likely cause is that
+# **L2-SP regularization at α = 0.01 was too conservative** for the
+# domain gap between simulated and real data. While L2-SP correctly
+# prevents catastrophic forgetting by anchoring parameters near their
+# pretrained values, it can also prevent *beneficial* adaptation when
+# the target domain requires representations that are substantially
+# different from the source domain.
+#
+# For future work, we would recommend either: (a) reducing α to 0.001
+# in Stages 2-3, (b) using a cosine-decay schedule for α that relaxes
+# the anchor over training, or (c) stopping after Stage 1 and accepting
+# that the tail-only adaptation is sufficient for this data regime.
 #
 # ### Connection to GSoC Project
 #
 # Real telescope data is the actual target of the GSoC project on
 # unsupervised super-resolution of strong lensing images. This notebook
 # demonstrates that even with **paired supervision** (matched HST/HSC
-# images), reconstruction on real data remains challenging — the domain gap
+# images), reconstruction on real data remains challenging - the domain gap
 # introduces systematic errors that no amount of simulated pretraining can
 # fully resolve. The failure analysis (Section 17) shows that worst-case
 # images involve complex PSF variations and background contamination that
@@ -1095,18 +1123,19 @@ plot_ablation_table(
 #   for our fields, and acquiring more requires expensive HST observing
 #   time. An unsupervised method that learns from unpaired HR and LR
 #   images would unlock vastly more training data.
-# - **The domain gap cannot be closed by simulation alone.** Transfer
-#   learning helps, but the ablation shows it is not a complete solution —
-#   there remains a gap between fine-tuned performance and the theoretical
-#   optimum. Unsupervised methods that learn the degradation model directly
-#   from real data sidestep this issue entirely.
+# - **The domain gap cannot be closed by simulation alone.** The ablation
+#   shows that transfer learning with aggressive L2-SP regularization can
+#   even underperform from-scratch training when the domain gap is large -
+#   the pretrained weights become a constraint rather than an advantage.
+#   Unsupervised methods that learn the degradation model directly from
+#   real data sidestep this issue entirely.
 # - **The back-projection loss is the bridge.** The composite loss used
 #   here includes a back-projection term that only requires the known
 #   downsampling operator, not paired ground truth. This term can be
 #   computed for any LR image regardless of whether a corresponding HR
 #   image exists. Task VII extends this idea: by combining back-projection
 #   with adversarial and perceptual losses, we can train a super-resolution
-#   network on unpaired real data — making the method scalable to the full
+#   network on unpaired real data - making the method scalable to the full
 #   HSC survey without requiring matched HST observations.
 #
 # The supervised results in this notebook serve as an **upper bound** for
