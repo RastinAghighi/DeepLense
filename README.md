@@ -153,8 +153,3 @@ pip install -r requirements.txt
 
 **Requirements:** `torch`, `torchvision`, `numpy`, `matplotlib`, `scikit-image`, `scikit-learn`, `jupytext`
 
----
-
-## Disclaimer
-
-This project was developed with AI assistance for code generation and formatting. Research strategy, architectural decisions, and experimental design were conducted by the author with guidance from academic advisors.
