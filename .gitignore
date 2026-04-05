@@ -6,3 +6,5 @@ Dataset/
 Dataset 3B/
 *.zip
 .env
+
+documents/
